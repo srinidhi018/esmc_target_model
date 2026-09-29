@@ -13,9 +13,11 @@ and recorded.
 
 from __future__ import annotations
 
+import re
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import torch
@@ -324,11 +326,107 @@ def _config_hash(obj: Any) -> str:
     return sha256_json(payload)
 
 
+_COMMIT_HASH_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+
+
 def _commit_hash(obj: Any) -> Optional[str]:
     config = getattr(obj, "config", obj)
     sha = getattr(config, "_commit_hash", None)
     if sha and sha != "unknown":
         return str(sha)
+    return None
+
+
+def _extract_commit_hash_from_path(file_path: Optional[str]) -> Optional[str]:
+    if not file_path:
+        return None
+    posix_path = str(Path(file_path).as_posix())
+    match = re.search(r"snapshots/([^/]+)", posix_path)
+    if match:
+        candidate = match.group(1)
+        if _COMMIT_HASH_RE.match(candidate):
+            return candidate.lower()
+    return None
+
+
+def _resolve_tokenizer_revision(
+    tokenizer: Any,
+    candidate: str,
+    cache_dir: Optional[str] = None,
+    model_rev: Optional[str] = None,
+) -> Optional[str]:
+    """Resolve the immutable commit SHA of the tokenizer.
+
+    1. If tokenizer or its config object explicitly exposes a commit hash, return it.
+    2. If candidate or tokenizer.name_or_path points to a snapshot directory path, extract SHA.
+    3. Look up tokenizer files in the Hugging Face Hub cache metadata:
+       - Check active cached snapshot files for the repository.
+       - If model_rev is known and files are cached under that revision, verify and return it.
+    4. If Hub is reachable, query HfApi model_info for the repo.
+    5. Returns None if genuinely unresolved (never invented or assumed).
+    """
+    tok_sha = _commit_hash(tokenizer)
+    if tok_sha:
+        return tok_sha
+
+    repo_or_path = getattr(tokenizer, "name_or_path", None) or candidate
+
+    # 2. Check if repo_or_path itself is a local filesystem path containing snapshot SHA
+    path_sha = _extract_commit_hash_from_path(str(repo_or_path))
+    if path_sha:
+        return path_sha
+
+    # 3. Resolve from cached file metadata in Hugging Face Hub cache
+    tok_filenames = [
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "special_tokens_map.json",
+        "vocab.json",
+        "vocab.txt",
+    ]
+    vocab_map = getattr(tokenizer, "vocab_files_names", {}) or {}
+    for vf in vocab_map.values():
+        if isinstance(vf, str) and vf not in tok_filenames:
+            tok_filenames.append(vf)
+
+    try:
+        hub = _huggingface_hub()
+        try_to_load = getattr(hub, "try_to_load_from_cache", None)
+        if callable(try_to_load):
+            found_shas = set()
+            for fname in tok_filenames:
+                cached = try_to_load(repo_or_path, fname, cache_dir=cache_dir)
+                if isinstance(cached, (str, Path)):
+                    c_sha = _extract_commit_hash_from_path(str(cached))
+                    if c_sha:
+                        found_shas.add(c_sha)
+            if len(found_shas) == 1:
+                return next(iter(found_shas))
+
+            # If not resolved via default active snapshot, check whether files exist under model_rev
+            if model_rev and _COMMIT_HASH_RE.match(str(model_rev)):
+                for fname in tok_filenames:
+                    cached = try_to_load(repo_or_path, fname, revision=model_rev, cache_dir=cache_dir)
+                    if isinstance(cached, (str, Path)):
+                        c_sha = _extract_commit_hash_from_path(str(cached))
+                        if c_sha:
+                            return c_sha
+    except Exception as exc:
+        LOGGER.debug("Cache resolution for tokenizer files failed: %s", exc)
+
+    # 4. If HF Hub is reachable, query HfApi
+    try:
+        hub = _huggingface_hub()
+        hf_api_cls = getattr(hub, "HfApi", None)
+        if hf_api_cls is not None:
+            api = hf_api_cls()
+            info = api.model_info(repo_or_path)
+            api_sha = getattr(info, "sha", None)
+            if api_sha and _COMMIT_HASH_RE.match(str(api_sha)):
+                return str(api_sha).lower()
+    except Exception as exc:
+        LOGGER.debug("HfApi lookup for tokenizer repo failed: %s", exc)
+
     return None
 
 
@@ -486,7 +584,12 @@ def resolve_model(candidates: Sequence[str], trust_remote_code: bool = False,
             )
 
         model_rev = _commit_hash(model)
-        tok_rev = _commit_hash(tokenizer)
+        tok_rev = _resolve_tokenizer_revision(
+            tokenizer,
+            candidate=candidate,
+            cache_dir=cache_dir,
+            model_rev=model_rev,
+        )
         rev_resolved = bool(model_rev and tok_rev)
 
         if not rev_resolved and not allow_unresolved_revision:

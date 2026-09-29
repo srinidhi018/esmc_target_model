@@ -1,0 +1,21 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Pytest cache
+.pytest_cache/
+
+# Pipeline execution outputs and local weights
+outputs/
+*.pt
+
+# Local root working copies (tracked files are in esmc_target_protein/)
+/configs/
+/data/
+/scripts/
+/src/
+/tests/
+/DGX_RUNBOOK.md
+/pyproject.toml
+/requirements.txt
