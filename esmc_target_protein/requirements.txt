@@ -1,0 +1,30 @@
+# ESMC-600M target-protein preprocessing pipeline.
+#
+# IMPORTANT - transformers guidance:
+#   1. Inspect the currently installed Transformers version first:
+#      python -c "import transformers; print('transformers:', transformers.__version__); from transformers import EsmcModel; print('native EsmcModel: OK')"
+#   2. Verify that native `transformers.EsmcModel` is available.
+#   3. If Transformers installation is required, install the specifically VERIFIED Transformers version required for the ESMC-600M checkpoint:
+#      pip install "transformers==<VERIFIED_TRANSFORMERS_VERSION>"
+#   4. Do NOT blindly upgrade to the latest version (do not run blind -U upgrades).
+#   5. Do NOT invent or specify an unverified version number.
+#   6. The exact working version will be frozen only after successful real ESMC-600M execution on DGX.
+
+# UNVERIFIED: Pin transformers==<VERIFIED_TRANSFORMERS_VERSION> only after native EsmcModel import is verified on host.
+# transformers (unpinned until verified on GPU host)
+
+# Core numerics / IO. torch is installed from the PyTorch index for your CUDA
+# version first, e.g.:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu121
+torch>=2.1
+numpy>=1.24
+pandas>=2.0
+PyYAML>=6.0
+tqdm>=4.65
+filelock>=3.12
+
+# Needed by the preflight check (Hugging Face Hub reachability + model_info).
+huggingface_hub>=0.23
+
+# Tests. The ESMC model is MOCKED for unit tests; no download is required.
+pytest>=7.4

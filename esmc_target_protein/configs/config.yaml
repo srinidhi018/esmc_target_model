@@ -1,0 +1,55 @@
+# ESMC-600M target-protein preprocessing pipeline.
+# Every value here is read by the pipeline; nothing scientific is hardcoded.
+#
+# sequence.max_model_positions / chunk_size = "auto" derive the real limit from
+# the resolved model (model.config.max_position_embeddings minus the special
+# tokens the tokenizer actually adds). Never default to 2048.
+
+model:
+  # Evaluated IN THIS ORDER. A candidate is selected only if it loads AND
+  # positively verifies as the official Biohub/EvolutionaryScale ESMC-600M
+  # checkpoint (owner + config architecture + hidden_size == 1152).
+  candidates: ["biohub/ESMC-600M-hf", "biohub/ESMC-600M"]
+  frozen: true                 # ESMC is never fine-tuned here
+  trust_remote_code: false     # never enabled automatically
+  cache_dir: null              # optional HF cache directory
+  local_files_only: false      # set true for a fully offline machine
+  allow_masked_lm_fallback: false  # OFF by default: require EsmcModel
+  allow_unresolved_revision: false # OFF by default: require resolved commit SHA
+
+sequence:
+  max_model_positions: auto    # derived from model.config
+  chunk_size: auto             # = model_max_positions - measured special tokens
+  overlap: 256                 # 0 = non-overlapping ablation
+  # keep_if_supported | error | replace_with_X   (no 'remove' policy exists)
+  special_residue_policy: "keep_if_supported"
+
+projection:
+  # DISABLED BY DEFAULT. This repository never trains a projection: the
+  # Linear(1152->256) + LayerNorm(256) is learned inside CancerCombo. If you
+  # enable this you MUST supply a genuinely trained checkpoint.
+  enabled: false
+  output_dim: 256
+  checkpoint: null
+
+aggregation:
+  method: "mean"               # only "mean" is supported (no attention here)
+
+runtime:
+  device: "auto"               # auto | cuda | cpu
+  dtype: "float32"             # float32 | float16 | bfloat16 (outputs always float32)
+  batch_size: 1
+  seed: 0
+
+cache:
+  enabled: true
+  path: null                   # null -> <output-dir>/protein_cache.pt
+  save_every: 100
+
+output:
+  directory: "outputs/full"
+  diagnostics: true
+  diagnostics_max_pairs: 20000
+  # UNCALIBRATED warning thresholds; diagnostics never fail a run.
+  cosine_collapse_warn_threshold: 0.995
+  norm_outlier_warn_factor: 10.0
